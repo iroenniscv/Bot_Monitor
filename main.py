@@ -1,4 +1,4 @@
-import logging
+.import logging
 import sqlite3
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
