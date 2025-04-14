@@ -27,6 +27,8 @@ EMOJI_TIME = "⏱️"
 EMOJI_LOADING = "🔄"
 EMOJI_HELP = "❓"
 EMOJI_ID = "🆔"
+EMOJI_BELL = "🔔"
+EMOJI_BELL_SLASH = "🔕"
 
 # Logging
 logging.basicConfig(
@@ -46,7 +48,8 @@ def init_db():
             name TEXT NOT NULL,
             last_status TEXT,
             last_checked TEXT,
-            response_time REAL
+            response_time REAL,
+            notifications_enabled BOOLEAN DEFAULT 1
         )
     ''')
     conn.commit()
@@ -69,11 +72,11 @@ def check_website(url):
 def monitor_websites(context: CallbackContext):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, url, name FROM websites")
+    cursor.execute("SELECT id, url, name, notifications_enabled FROM websites")
     websites = cursor.fetchall()
     
     for website in websites:
-        id, url, name = website
+        id, url, name, notifications_enabled = website
         result = check_website(url)
         
         cursor.execute('''
@@ -89,7 +92,7 @@ def monitor_websites(context: CallbackContext):
             id
         ))
         
-        if result["status"] == "DOWN":
+        if result["status"] == "DOWN" and notifications_enabled:
             alert_msg = (
                 f"{EMOJI_WARNING} *ALERTA*: {name} ({url}) está *INACCESIBLE*\n"
                 f"Error: {result.get('error', 'Desconocido')}\n"
@@ -118,7 +121,8 @@ def help_command(update: Update, context: CallbackContext):
         f"/status - Ver estado actual en tiempo real\n"
         f"/delete <id> {EMOJI_TRASH} - Eliminar un sitio por su ID\n"
         f"/monitor - Activar monitoreo automático\n"
-        f"/stop - Detener monitoreo automático\n\n"
+        f"/stop - Detener monitoreo automático\n"
+        f"/notifications <on/off> - Activar/desactivar notificaciones\n\n"
         f"Ejemplo para añadir sitio:\n"
         f"`/add Google https://google.com`\n\n"
         f"Para eliminar un sitio, primero usa `/list` para ver los IDs"
@@ -159,7 +163,7 @@ def add_website(update: Update, context: CallbackContext):
 def list_websites(update: Update, context: CallbackContext):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, url, last_status, last_checked, response_time FROM websites")
+    cursor.execute("SELECT id, name, url, last_status, last_checked, response_time, notifications_enabled FROM websites")
     websites = cursor.fetchall()
     conn.close()
     
@@ -168,13 +172,15 @@ def list_websites(update: Update, context: CallbackContext):
         return
     
     message = f"{EMOJI_LIST} *Sitios Monitoreados (ID - Nombre):*\n\n"
-    for id, name, url, status, checked, resp_time in websites:
+    for id, name, url, status, checked, resp_time, notifications_enabled in websites:
         status_emoji = EMOJI_UP if status == "UP" else EMOJI_DOWN
         time_str = f"{resp_time:.2f}s" if resp_time else "N/A"
+        notification_status = f"{EMOJI_BELL} ON" if notifications_enabled else f"{EMOJI_BELL_SLASH} OFF"
         message += (
             f"{EMOJI_ID} *{id}* - {status_emoji} *{name}*\n"
             f"🔗 `{url}`\n"
-            f"{EMOJI_TIME} {time_str} | 📅 {checked}\n\n"
+            f"{EMOJI_TIME} {time_str} | 📅 {checked}\n"
+            f"Notificaciones: {notification_status}\n\n"
         )
     
     update.message.reply_text(message, parse_mode="Markdown")
@@ -298,6 +304,63 @@ def stop_command(update: Update, context: CallbackContext):
     
     update.message.reply_text("⏹️ Monitoreo automático detenido")
 
+def toggle_notifications(update: Update, context: CallbackContext):
+    if not context.args:
+        update.message.reply_text("ℹ️ Uso: /notifications <on/off> [id]\nSi no se especifica ID, afecta a todos los sitios")
+        return
+    
+    action = context.args[0].lower()
+    site_id = int(context.args[1]) if len(context.args) > 1 else None
+    
+    if action not in ['on', 'off']:
+        update.message.reply_text("❌ Opción inválida. Usa 'on' u 'off'")
+        return
+    
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    
+    try:
+        if site_id:
+            # Cambiar notificaciones para un sitio específico
+            cursor.execute("SELECT name FROM websites WHERE id = ?", (site_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                update.message.reply_text("❌ No se encontró un sitio con ese ID")
+                return
+            
+            cursor.execute(
+                "UPDATE websites SET notifications_enabled = ? WHERE id = ?",
+                (1 if action == 'on' else 0, site_id)
+            )
+            conn.commit()
+            
+            update.message.reply_text(
+                f"{EMOJI_BELL if action == 'on' else EMOJI_BELL_SLASH} "
+                f"Notificaciones {'activadas' if action == 'on' else 'desactivadas'} "
+                f"para el sitio *{result[0]}* (ID: {site_id})",
+                parse_mode="Markdown"
+            )
+        else:
+            # Cambiar notificaciones para todos los sitios
+            cursor.execute(
+                "UPDATE websites SET notifications_enabled = ?",
+                (1 if action == 'on' else 0,)
+            )
+            conn.commit()
+            
+            update.message.reply_text(
+                f"{EMOJI_BELL if action == 'on' else EMOJI_BELL_SLASH} "
+                f"Notificaciones {'activadas' if action == 'on' else 'desactivadas'} "
+                "para *todos* los sitios monitoreados",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        logger.error(f"Error al cambiar notificaciones: {e}")
+        update.message.reply_text("❌ Ocurrió un error al actualizar las notificaciones")
+    finally:
+        conn.close()
+
 # Servidor web para Render
 app = Flask(__name__)
 
@@ -327,6 +390,7 @@ def main():
     dp.add_handler(CommandHandler("delete", delete_website))
     dp.add_handler(CommandHandler("monitor", monitor_command))
     dp.add_handler(CommandHandler("stop", stop_command))
+    dp.add_handler(CommandHandler("notifications", toggle_notifications))
     
     # Tarea periódica
     job_queue = updater.job_queue
