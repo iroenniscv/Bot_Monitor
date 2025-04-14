@@ -9,7 +9,7 @@ from datetime import datetime
 TOKEN = "7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8"  # Reemplaza con el token de @BotFather
 ADMIN_ID = 1759969205       # Reemplaza con tu ID de Telegram (para alertas)
 DB_NAME = "website_monitor.db"
-CHECK_INTERVAL = 300  # 5 minutos (en segundos)
+CHECK_INTERVAL = 30  # 5 minutos (en segundos)
 
 # Emojis
 EMOJI_UP = "🟢"
