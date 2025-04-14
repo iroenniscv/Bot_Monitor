@@ -13,7 +13,7 @@ from flask import Flask
 TOKEN = "7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8"
 ADMIN_ID = 1759969205
 DB_NAME = "website_monitor.db"
-CHECK_INTERVAL = 30  # 30 segundos para pruebas (cambiar a 300 en producción)
+CHECK_INTERVAL = 30  # 30 segundos para pruebas
 PORT = int(os.environ.get('PORT', 8080))  # Para Render
 
 # Emojis
@@ -24,6 +24,7 @@ EMOJI_LIST = "📋"
 EMOJI_ADD = "➕"
 EMOJI_TRASH = "🗑️"
 EMOJI_TIME = "⏱️"
+EMOJI_LOADING = "🔄"
 
 # Logging
 logging.basicConfig(
@@ -101,6 +102,71 @@ def monitor_websites(context: CallbackContext):
     conn.commit()
     conn.close()
 
+# Función mejorada de estado
+def status(update: Update, context: CallbackContext):
+    # Enviar mensaje de carga
+    loading_msg = context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f"{EMOJI_LOADING} Verificando estado de los sitios web...",
+        parse_mode="Markdown"
+    )
+    
+    # Obtener y verificar todos los sitios
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, url, name FROM websites")
+    websites = cursor.fetchall()
+    
+    if not websites:
+        context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=loading_msg.message_id,
+            text="ℹ️ No hay sitios monitoreados actualmente"
+        )
+        conn.close()
+        return
+    
+    # Verificar cada sitio y actualizar la base de datos
+    message = f"{EMOJI_LIST} *Estado Actual de los Sitios:*\n\n"
+    for website in websites:
+        id, url, name = website
+        result = check_website(url)
+        
+        # Actualizar registro en la base de datos
+        cursor.execute('''
+            UPDATE websites
+            SET last_status = ?,
+                last_checked = ?,
+                response_time = ?
+            WHERE id = ?
+        ''', (
+            result["status"],
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            result.get("response_time", 0),
+            id
+        ))
+        
+        # Construir mensaje
+        status_emoji = EMOJI_UP if result["status"] == "UP" else EMOJI_DOWN
+        time_str = f"{result.get('response_time', 0):.2f}s" if result.get('response_time') else "N/A"
+        message += (
+            f"{status_emoji} *{name}*\n"
+            f"🔗 `{url}`\n"
+            f"{EMOJI_TIME} {time_str} | 📅 {datetime.now().strftime('%H:%M:%S')}\n"
+            f"Estado: {'🟢 Activo' if result['status'] == 'UP' else '🔴 Inactivo'}\n\n"
+        )
+    
+    conn.commit()
+    conn.close()
+    
+    # Editar el mensaje original con los resultados
+    context.bot.edit_message_text(
+        chat_id=update.effective_chat.id,
+        message_id=loading_msg.message_id,
+        text=message,
+        parse_mode="Markdown"
+    )
+
 # Comandos del bot
 def start(update: Update, context: CallbackContext):
     update.message.reply_text(
@@ -108,7 +174,7 @@ def start(update: Update, context: CallbackContext):
         "Comandos disponibles:\n"
         f"/add {EMOJI_ADD} - Añadir nuevo sitio\n"
         f"/list {EMOJI_LIST} - Listar sitios monitoreados\n"
-        f"/status - Ver estado actual\n"
+        f"/status - Ver estado actual en tiempo real\n"
         f"/delete - Eliminar un sitio",
         parse_mode="Markdown"
     )
@@ -125,7 +191,6 @@ def add_website(update: Update, context: CallbackContext):
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
     
-    # Validación básica de URL
     if not re.match(r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', url):
         update.message.reply_text("❌ URL inválida. Debe comenzar con http:// o https://")
         return
@@ -182,6 +247,7 @@ def run_flask():
 def main():
     # Iniciar servidor Flask en segundo plano
     flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
     flask_thread.start()
     
     updater = Updater(TOKEN, use_context=True)
@@ -191,6 +257,7 @@ def main():
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("add", add_website))
     dp.add_handler(CommandHandler("list", list_websites))
+    dp.add_handler(CommandHandler("status", status))
     
     # Tarea periódica
     job_queue = updater.job_queue
