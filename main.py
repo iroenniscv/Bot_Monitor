@@ -1,46 +1,41 @@
 import logging
 import sqlite3
 import requests
-from telegram import Update, ParseMode
-from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
 from datetime import datetime
 
 # Configuración
-TOKEN = "7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8"  # Reemplázalo por tu token
-DB_NAME = "monitor.db"
-CHECK_INTERVAL = 60  # 5 minutos (en segundos)
+TOKEN = "7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8"  # Reemplaza con el token de @BotFather
+ADMIN_ID = 1759969205       # Reemplaza con tu ID de Telegram (para alertas)
+DB_NAME = "website_monitor.db"
+CHECK_INTERVAL = 50  # 5 minutos (en segundos)
 
-# Emojis para diseño
+# Emojis
 EMOJI_UP = "🟢"
 EMOJI_DOWN = "🔴"
 EMOJI_WARNING = "⚠️"
 EMOJI_LIST = "📋"
 EMOJI_ADD = "➕"
-EMOJI_USER = "👤"
-EMOJI_ID = "🆔"
-EMOJI_LANG = "🌍"
+EMOJI_TRASH = "🗑️"
 
 # Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Base de datos
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS websites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
             url TEXT NOT NULL,
             name TEXT NOT NULL,
             last_status TEXT,
             last_checked TEXT
         )
-    """)
+    ''')
     conn.commit()
     conn.close()
 
@@ -61,75 +56,39 @@ def check_website(url):
 def monitor_websites(context: CallbackContext):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, id, url, name FROM websites")
+    cursor.execute("SELECT id, url, name FROM websites")
     websites = cursor.fetchall()
     
-    for user_id, id, url, name in websites:
+    for website in websites:
+        id, url, name = website
         result = check_website(url)
         
-        cursor.execute("""
+        cursor.execute('''
             UPDATE websites
             SET last_status = ?, last_checked = ?
             WHERE id = ?
-        """, (result["status"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
+        ''', (result["status"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
         
         if result["status"] == "DOWN":
-            alert_msg = (
-                f"{EMOJI_WARNING} *ALERTA*: La web *{name}* está caída.\n"
-                f"🔗 URL: `{url}`\n"
-                f"📛 Error: {result.get('error', 'Código ' + str(result['status_code']))}"
-            )
-            context.bot.send_message(
-                chat_id=user_id,
-                text=alert_msg,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
+            alert_msg = f"{EMOJI_WARNING} *ALERTA*: {name} ({url}) está *INACCESIBLE*.\nCódigo de error: {result.get('error', 'N/A')}"
+            context.bot.send_message(chat_id=ADMIN_ID, text=alert_msg, parse_mode="Markdown")
     
     conn.commit()
     conn.close()
 
-# Decorador para comandos privados
-def private_chat_only(func):
-    def wrapper(update: Update, context: CallbackContext):
-        if update.message.chat.type != "private":
-            update.message.reply_text("🔒 Este bot solo funciona en chats privados.")
-            return
-        return func(update, context)
-    return wrapper
-
-# Comando /start mejorado
-@private_chat_only
+# Comandos del bot
 def start(update: Update, context: CallbackContext):
-    user = update.message.from_user
-    welcome_msg = (
-        f"✨ *¡Hola {user.first_name}!* ✨\n\n"
-        f"{EMOJI_USER} *Tu información*\n"
-        f"{EMOJI_ID} ID: `{user.id}`\n"
-        f"👤 Usuario: @{user.username if user.username else 'No tiene'}\n"
-        f"{EMOJI_LANG} Idioma: {user.language_code or 'No detectado'}\n\n"
-        f"🌐 *Monitor de Webs Privado*\n"
-        f"• Añade páginas con /add <nombre> <url>\n"
-        f"• Revisa tus sitios con /list\n\n"
-        f"📌 Ejemplo:\n"
-        f"`/add MiWeb https://ejemplo.com`"
-    )
     update.message.reply_text(
-        welcome_msg,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        disable_web_page_preview=True
+        "🌐 *Monitor de Websites*\n\n"
+        "Usa /add para agregar una URL.\n"
+        "Usa /list para ver tus sitios monitoreados.",
+        parse_mode="Markdown"
     )
 
-# Comando /add
-@private_chat_only
 def add_website(update: Update, context: CallbackContext):
-    user_id = update.message.from_user.id
     args = context.args
-    
     if len(args) < 2:
-        update.message.reply_text(
-            f"ℹ️ Uso: /add <nombre> <url>\nEjemplo: /add Google https://google.com",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+        update.message.reply_text("Uso: /add <nombre> <url>")
         return
     
     name, url = " ".join(args[:-1]), args[-1]
@@ -138,47 +97,31 @@ def add_website(update: Update, context: CallbackContext):
     
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO websites (user_id, url, name) VALUES (?, ?, ?)",
-        (user_id, url, name)
-    )
+    cursor.execute("INSERT INTO websites (url, name) VALUES (?, ?)", (url, name))
     conn.commit()
     conn.close()
     
-    update.message.reply_text(
-        f"{EMOJI_ADD} *{name}* añadido a tu lista privada.",
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    update.message.reply_text(f"{EMOJI_ADD} *{name}* ({url}) añadido al monitor.", parse_mode="Markdown")
 
-# Comando /list
-@private_chat_only
 def list_websites(update: Update, context: CallbackContext):
-    user_id = update.message.from_user.id
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT name, url, last_status, last_checked FROM websites WHERE user_id = ?",
-        (user_id,)
-    )
+    cursor.execute("SELECT name, url, last_status, last_checked FROM websites")
     websites = cursor.fetchall()
     conn.close()
     
     if not websites:
-        update.message.reply_text("📭 No tienes webs monitoreadas. Usa /add para añadir una.")
+        update.message.reply_text("No hay sitios monitoreados.")
         return
     
-    message = f"{EMOJI_LIST} *Tus webs monitoreadas:*\n\n"
+    message = f"{EMOJI_LIST} *Sitios Monitoreados:*\n\n"
     for name, url, status, checked in websites:
         status_emoji = EMOJI_UP if status == "UP" else EMOJI_DOWN
-        message += f"{status_emoji} *{name}*\n🔗 `{url}`\n🕒 Última verificación: {checked or 'Nunca'}\n\n"
+        message += f"{status_emoji} *{name}*: `{url}`\nÚltima verificación: {checked}\n\n"
     
-    update.message.reply_text(
-        message,
-        parse_mode=ParseMode.MARKDOWN_V2,
-        disable_web_page_preview=True
-    )
+    update.message.reply_text(message, parse_mode="Markdown")
 
-# Configuración del bot
+# Inicialización del bot
 def main():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -188,7 +131,7 @@ def main():
     dp.add_handler(CommandHandler("add", add_website))
     dp.add_handler(CommandHandler("list", list_websites))
     
-    # Tarea periódica
+    # Tarea periódica de monitorización
     job_queue = updater.job_queue
     job_queue.run_repeating(monitor_websites, interval=CHECK_INTERVAL, first=0)
     
