@@ -1,17 +1,17 @@
 import logging
 import sqlite3
 import requests
-from telegram import Update, ParseMode
+from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from datetime import datetime
 
 # Configuración
-TOKEN = "7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8"  # Reemplázalo
+TOKEN = "7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8"  # Reemplaza con tu token de BotFather
 DB_NAME = "monitor.db"
-CHECK_INTERVAL = 60  # 1 minuto (en segundos)
-ALERT_INTERVAL = 60  # Intervalo de notificaciones (60 segundos)
+CHECK_INTERVAL = 60  # 1 minuto (chequeo de estado)
+ALERT_INTERVAL = 60  # 1 minuto (notificaciones)
 
-# Emojis
+# Emojis para diseño
 EMOJI_UP = "🟢"
 EMOJI_DOWN = "🔴"
 EMOJI_WARNING = "⚠️"
@@ -21,15 +21,16 @@ EMOJI_BELL = "🔔"
 EMOJI_USER = "👤"
 EMOJI_ID = "🆔"
 EMOJI_LANG = "🌍"
+EMOJI_TRASH = "🗑️"
 
-# Logging
+# Configuración de logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Decorador para comandos privados ---
+# Decorador para comandos privados
 def private_chat_only(func):
     def wrapper(update: Update, context: CallbackContext):
         if update.message.chat.type != "private":
@@ -37,13 +38,12 @@ def private_chat_only(func):
             return
         return func(update, context)
     return wrapper
-# ----------------------------------------
 
 # Base de datos
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS websites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -52,7 +52,7 @@ def init_db():
             last_status TEXT,
             last_checked TEXT
         )
-    """)
+    ''')
     conn.commit()
     conn.close()
 
@@ -79,11 +79,11 @@ def monitor_websites(context: CallbackContext):
     for user_id, id, url, name in websites:
         result = check_website(url)
         
-        cursor.execute("""
+        cursor.execute('''
             UPDATE websites
             SET last_status = ?, last_checked = ?
             WHERE id = ?
-        """, (result["status"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
+        ''', (result["status"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
         
         if result["status"] == "DOWN":
             alert_msg = (
@@ -94,7 +94,7 @@ def monitor_websites(context: CallbackContext):
             context.bot.send_message(
                 chat_id=user_id,
                 text=alert_msg,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode="MarkdownV2"
             )
     
     conn.commit()
@@ -107,10 +107,10 @@ def send_status_alerts(context: CallbackContext):
     users = cursor.fetchall()
     
     for (user_id,) in users:
-        cursor.execute("""
+        cursor.execute('''
             SELECT name, url, last_status FROM websites 
             WHERE user_id = ?
-        """, (user_id,))
+        ''', (user_id,))
         websites = cursor.fetchall()
         
         if not websites:
@@ -125,7 +125,7 @@ def send_status_alerts(context: CallbackContext):
             context.bot.send_message(
                 chat_id=user_id,
                 text=message,
-                parse_mode=ParseMode.MARKDOWN_V2,
+                parse_mode="MarkdownV2",
                 disable_web_page_preview=True
             )
         except Exception as e:
@@ -133,7 +133,7 @@ def send_status_alerts(context: CallbackContext):
     
     conn.close()
 
-# Comandos
+# Comandos del bot
 @private_chat_only
 def start(update: Update, context: CallbackContext):
     user = update.message.from_user
@@ -145,10 +145,11 @@ def start(update: Update, context: CallbackContext):
         f"{EMOJI_LANG} Idioma: {user.language_code or 'No detectado'}\n\n"
         f"🌐 *Monitor de Webs Privado*\n"
         f"• Añade páginas con /add <nombre> <url>\n"
-        f"• Revisa tus sitios con /list\n\n"
+        f"• Revisa tus sitios con /list\n"
+        f"• Recibirás alertas automáticas cada minuto\n\n"
         f"📌 Ejemplo:\n"
         f"`/add MiWeb https://ejemplo.com`",
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode="MarkdownV2",
         disable_web_page_preview=True
     )
 
@@ -159,8 +160,8 @@ def add_website(update: Update, context: CallbackContext):
     
     if len(args) < 2:
         update.message.reply_text(
-            f"ℹ️ Uso: /add <nombre> <url>\nEjemplo: /add Google https://google.com",
-            parse_mode=ParseMode.MARKDOWN_V2
+            "ℹ️ Uso: /add <nombre> <url>\nEjemplo: /add Google https://google.com",
+            parse_mode="MarkdownV2"
         )
         return
     
@@ -179,7 +180,7 @@ def add_website(update: Update, context: CallbackContext):
     
     update.message.reply_text(
         f"{EMOJI_ADD} *{name}* añadido a tu lista privada.",
-        parse_mode=ParseMode.MARKDOWN_V2
+        parse_mode="MarkdownV2"
     )
 
 @private_chat_only
@@ -205,13 +206,13 @@ def list_websites(update: Update, context: CallbackContext):
     
     update.message.reply_text(
         message,
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode="MarkdownV2",
         disable_web_page_preview=True
     )
 
-# Iniciar bot
+# Configuración del bot
 def main():
-    updater = Updater(TOKEN, use_context=True)
+    updater = Updater(TOKEN)
     dp = updater.dispatcher
     
     # Comandos
