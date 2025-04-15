@@ -1,186 +1,159 @@
-import logging
-import sqlite3
-import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
-from datetime import datetime
-import re
 import os
-from threading import Thread
-from flask import Flask
+from telethon.sync import TelegramClient
+from telethon.sessions import StringSession
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
+import logging
 
-# Configuración
-TOKEN = "7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8"
-ADMIN_ID = 1759969205
-DB_NAME = "website_monitor.db"
-CHECK_INTERVAL = 30  # 30 segundos para pruebas
-PORT = int(os.environ.get('PORT', 8080))  # Para Render
-REQUIRED_CHANNEL = "@tucanal"  # Canal requerido para usar el bot
+# Configuración básica de logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Emojis (se mantienen los mismos)
-EMOJI_UP = "🟢"
-EMOJI_DOWN = "🔴"
-EMOJI_WARNING = "⚠️"
-EMOJI_LIST = "📋"
-EMOJI_ADD = "➕"
-EMOJI_TRASH = "🗑️"
-EMOJI_TIME = "⏱️"
-EMOJI_LOADING = "🔄"
-EMOJI_HELP = "❓"
-EMOJI_ID = "🆔"
-EMOJI_BELL = "🔔"
-EMOJI_BELL_SLASH = "🔕"
-EMOJI_USER = "👤"
-EMOJI_CHANNEL = "📢"
+# Estados para la conversación
+GETTING_API_ID, GETTING_API_HASH = range(2)
 
-# ... (el resto de las configuraciones iniciales se mantienen igual)
-
-# Nueva función para verificar membresía en canal
-async def is_user_member(user_id: int, context: CallbackContext) -> bool:
-    try:
-        member = await context.bot.get_chat_member(REQUIRED_CHANNEL, user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        logger.error(f"Error verificando membresía: {e}")
-        return False
-
-# Mensaje de bienvenida mejorado
-def start(update: Update, context: CallbackContext):
-    user = update.effective_user
-    chat = update.effective_chat
+class SessionGeneratorBot:
+    def __init__(self, token):
+        self.token = token
+        self.user_data = {}
+        
+        # Configura el updater y el dispatcher
+        self.updater = Updater(token=self.token, use_context=True)
+        self.dispatcher = self.updater.dispatcher
+        
+        # Maneja los comandos
+        self.dispatcher.add_handler(CommandHandler('start', self.start))
+        self.dispatcher.add_handler(CommandHandler('generate', self.start_generate))
+        
+        # Maneja los callbacks de los botones
+        self.dispatcher.add_handler(CallbackQueryHandler(self.button))
+        
+        # Maneja los mensajes de texto
+        self.dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, self.handle_message))
+        
+        # Maneja errores
+        self.dispatcher.add_error_handler(self.error_handler)
     
-    welcome_msg = (
-        f"👋 ¡Hola {user.first_name}! {EMOJI_USER}\n\n"
-        f"📋 *Información de tu cuenta:*\n"
-        f"- Nombre: {user.full_name}\n"
-        f"- ID: {user.id}\n"
-        f"- Usuario: @{user.username if user.username else 'N/A'}\n\n"
-        f"🤖 Soy un bot de monitoreo de sitios web. Puedo avisarte cuando tus sitios web están caídos.\n\n"
-        f"📢 *Importante:* Para usar este bot debes unirte a nuestro canal oficial: {REQUIRED_CHANNEL}\n\n"
-        f"📝 Usa /help para ver los comandos disponibles"
-    )
-    
-    update.message.reply_text(welcome_msg, parse_mode="Markdown")
-    
-    # Verificar si el usuario está en el canal requerido
-    context.job_queue.run_once(
-        lambda ctx: check_channel_membership(ctx, user.id, chat.id),
-        2  # Pequeño retraso para evitar flood
-    )
-
-async def check_channel_membership(context: CallbackContext, user_id: int, chat_id: int):
-    if not await is_user_member(user_id, context):
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"❌ Para usar este bot debes unirte a nuestro canal: {REQUIRED_CHANNEL}\n\n"
-                 f"Por favor únete y vuelve a intentarlo.",
-            parse_mode="Markdown"
+    def start(self, update: Update, context: CallbackContext):
+        """Envía un mensaje de bienvenida cuando se usa el comando /start"""
+        user = update.effective_user
+        welcome_text = (
+            f"Hola {user.first_name}!\n\n"
+            "Soy un bot generador de sesiones de Telethon.\n\n"
+            "Para generar una sesión, usa el comando /generate\n\n"
+            "⚠️ **ADVERTENCIA**: Nunca compartas tu sesión con nadie."
         )
-        return False
-    return True
-
-# Middleware para verificar membresía antes de procesar comandos
-async def check_membership(update: Update, context: CallbackContext, next_handler):
-    user_id = update.effective_user.id
+        
+        update.message.reply_text(welcome_text)
     
-    if not await is_user_member(user_id, context):
-        await update.message.reply_text(
-            f"❌ Debes unirte a nuestro canal {REQUIRED_CHANNEL} para usar este bot.\n\n"
-            f"Por favor únete y vuelve a intentar el comando.",
-            parse_mode="Markdown"
-        )
-        return
-    
-    return await next_handler(update, context)
-
-# Modificación del handler de mensajes para detectar URLs automáticamente
-def message_handler(update: Update, context: CallbackContext):
-    # Primero verificar membresía
-    if not check_membership(update, context, lambda u, c: True):
-        return
-    
-    text = update.message.text
-    urls = re.findall(r'https?://[^\s]+', text)
-    
-    if urls:
-        context.user_data['detected_urls'] = urls
+    def start_generate(self, update: Update, context: CallbackContext):
+        """Inicia el proceso de generación de sesión"""
+        chat_id = update.effective_chat.id
+        self.user_data[chat_id] = {}
+        
         update.message.reply_text(
-            f"🔍 He detectado {len(urls)} URL(s) en tu mensaje:\n\n" +
-            "\n".join([f"{i+1}. {url}" for i, url in enumerate(urls)]) +
-            "\n\nPor favor responde con el nombre que quieres darle a este sitio web (ejemplo: 'Mi Sitio Web').",
-            parse_mode="Markdown"
+            "Vamos a generar una sesión de Telethon.\n\n"
+            "Por favor, envía tu **API_ID** (solo números):",
+            parse_mode='Markdown'
         )
-    else:
-        # Si el mensaje es texto plano (no comando) y parece ser un nombre para la URL
-        if 'detected_urls' in context.user_data and not text.startswith('/'):
-            url = context.user_data['detected_urls'][0]  # Tomamos la primera URL detectada
-            name = text.strip()
+        
+        return GETTING_API_ID
+    
+    def handle_message(self, update: Update, context: CallbackContext):
+        """Maneja los mensajes durante la conversación"""
+        chat_id = update.effective_chat.id
+        text = update.message.text
+        
+        if chat_id not in self.user_data:
+            return
+        
+        if 'state' not in self.user_data[chat_id]:
+            # Si estamos esperando el API_ID
+            try:
+                api_id = int(text)
+                self.user_data[chat_id]['api_id'] = api_id
+                self.user_data[chat_id]['state'] = GETTING_API_HASH
+                
+                update.message.reply_text(
+                    "✅ API_ID recibido correctamente.\n\n"
+                    "Ahora envía tu **API_HASH**:",
+                    parse_mode='Markdown'
+                )
+            except ValueError:
+                update.message.reply_text("⚠️ El API_ID debe ser un número. Por favor, inténtalo de nuevo.")
+        elif self.user_data[chat_id]['state'] == GETTING_API_HASH:
+            # Si estamos esperando el API_HASH
+            self.user_data[chat_id]['api_hash'] = text
+            self.user_data[chat_id]['state'] = None
             
-            # Validar nombre
-            if len(name) < 2 or len(name) > 50:
-                update.message.reply_text("❌ El nombre debe tener entre 2 y 50 caracteres.")
-                return
+            # Generamos la sesión
+            self.generate_session(update, chat_id)
+    
+    def generate_session(self, update: Update, chat_id: int):
+        """Genera la sesión de Telethon"""
+        user_data = self.user_data.get(chat_id, {})
+        
+        if not user_data or 'api_id' not in user_data or 'api_hash' not in user_data:
+            update.message.reply_text("⚠️ Error: Datos incompletos. Por favor, inicia el proceso nuevamente con /generate")
+            return
+        
+        try:
+            api_id = user_data['api_id']
+            api_hash = user_data['api_hash']
             
-            # Proceder a agregar el sitio
-            context.args = [name, url]  # Simulamos los argumentos del comando /add
-            add_website(update, context)
-            del context.user_data['detected_urls']
+            with TelegramClient(StringSession(), api_id, api_hash) as client:
+                session_string = client.session.save()
+                
+                response_text = (
+                    "✅ **Sesión generada con éxito!**\n\n"
+                    "🔐 **Tu sesión es:**\n"
+                    f"`{session_string}`\n\n"
+                    "⚠️ **ADVERTENCIA IMPORTANTE:**\n"
+                    "- Nunca compartas esta cadena con nadie\n"
+                    "- Quien tenga acceso a esta cadena puede controlar tu cuenta\n"
+                    "- Si crees que tu sesión ha sido comprometida, revócala inmediatamente\n\n"
+                    "Guarda esta sesión en un lugar seguro."
+                )
+                
+                update.message.reply_text(response_text, parse_mode='Markdown')
+                
+        except Exception as e:
+            error_msg = f"⚠️ Error al generar la sesión: {str(e)}"
+            logger.error(error_msg)
+            update.message.reply_text(error_msg)
+        
+        # Limpiamos los datos del usuario
+        if chat_id in self.user_data:
+            del self.user_data[chat_id]
+    
+    def button(self, update: Update, context: CallbackContext):
+        """Maneja los callbacks de los botones"""
+        query = update.callback_query
+        query.answer()
+        
+        if query.data == 'generate':
+            self.start_generate(update, context)
+    
+    def error_handler(self, update: Update, context: CallbackContext):
+        """Maneja los errores"""
+        logger.error(msg="Error en el bot:", exc_info=context.error)
+        
+        if update.effective_message:
+            update.effective_message.reply_text(
+                "⚠️ Ocurrió un error inesperado. Por favor, inténtalo de nuevo."
+            )
+    
+    def run(self):
+        """Inicia el bot"""
+        self.updater.start_polling()
+        self.updater.idle()
 
-# Modificación del comando /add para usar el flujo interactivo
-def add_website(update: Update, context: CallbackContext):
-    # Verificar membresía primero
-    if not check_membership(update, context, lambda u, c: True):
-        return
+if __name__ == '__main__':
+    # Configura tu token de bot aquí
+    BOT_TOKEN = '7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8'
     
-    # Si no hay argumentos pero hay URLs detectadas
-    if not context.args and 'detected_urls' in context.user_data:
-        update.message.reply_text(
-            "Por favor responde con el nombre que quieres darle a este sitio web.",
-            parse_mode="Markdown"
-        )
-        return
-    
-    # Resto de la función original...
-    args = context.args
-    if len(args) < 2:
-        update.message.reply_text(
-            "ℹ️ Puedes:\n"
-            "1. Escribir /add <nombre> <url>\n"
-            "2. O simplemente enviar una URL y te guiaré para agregarla",
-            parse_mode="Markdown"
-        )
-        return
-    
-    # ... (resto de la función add_website original)
-
-# Modificar todos los handlers para incluir la verificación de membresía
-def wrap_command(handler):
-    async def wrapped(update: Update, context: CallbackContext):
-        return await check_membership(update, context, handler)
-    return wrapped
-
-# Inicialización del bot (modificada para incluir el nuevo handler)
-def main():
-    # ... (configuración inicial igual)
-    
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
-    
-    # Handlers con verificación de membresía
-    dp.add_handler(CommandHandler("start", wrap_command(start)))
-    dp.add_handler(CommandHandler("help", wrap_command(help_command)))
-    dp.add_handler(CommandHandler("add", wrap_command(add_website)))
-    dp.add_handler(CommandHandler("list", wrap_command(list_websites)))
-    dp.add_handler(CommandHandler("status", wrap_command(status)))
-    dp.add_handler(CommandHandler("delete", wrap_command(delete_website)))
-    dp.add_handler(CommandHandler("monitor", wrap_command(monitor_command)))
-    dp.add_handler(CommandHandler("stop", wrap_command(stop_command)))
-    dp.add_handler(CommandHandler("notifications", wrap_command(toggle_notifications)))
-    
-    # Handler para mensajes regulares (detectar URLs)
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, wrap_command(message_handler)))
-    
-    # ... (resto del código main igual)
-
-if __name__ == "__main__":
-    main()
+    bot = SessionGeneratorBot(BOT_TOKEN)
+    bot.run()
