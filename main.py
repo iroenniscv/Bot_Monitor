@@ -2,7 +2,14 @@ import os
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, Filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters
+)
 import logging
 
 # Configuración básica de logging
@@ -20,24 +27,23 @@ class SessionGeneratorBot:
         self.token = token
         self.user_data = {}
         
-        # Configura el updater y el dispatcher
-        self.updater = Updater(token=self.token, use_context=True)
-        self.dispatcher = self.updater.dispatcher
+        # Configura la aplicación
+        self.application = Application.builder().token(self.token).build()
         
         # Maneja los comandos
-        self.dispatcher.add_handler(CommandHandler('start', self.start))
-        self.dispatcher.add_handler(CommandHandler('generate', self.start_generate))
+        self.application.add_handler(CommandHandler('start', self.start))
+        self.application.add_handler(CommandHandler('generate', self.start_generate))
         
         # Maneja los callbacks de los botones
-        self.dispatcher.add_handler(CallbackQueryHandler(self.button))
+        self.application.add_handler(CallbackQueryHandler(self.button))
         
         # Maneja los mensajes de texto
-        self.dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
         # Maneja errores
-        self.dispatcher.add_error_handler(self.error_handler)
+        self.application.add_error_handler(self.error_handler)
     
-    def start(self, update: Update, context: CallbackContext):
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Envía un mensaje de bienvenida cuando se usa el comando /start"""
         user = update.effective_user
         welcome_text = (
@@ -47,14 +53,14 @@ class SessionGeneratorBot:
             "⚠️ **ADVERTENCIA**: Nunca compartas tu sesión con nadie."
         )
         
-        update.message.reply_text(welcome_text)
+        await update.message.reply_text(welcome_text)
     
-    def start_generate(self, update: Update, context: CallbackContext):
+    async def start_generate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Inicia el proceso de generación de sesión"""
         chat_id = update.effective_chat.id
         self.user_data[chat_id] = {}
         
-        update.message.reply_text(
+        await update.message.reply_text(
             "Vamos a generar una sesión de Telethon.\n\n"
             "Por favor, envía tu **API_ID** (solo números):",
             parse_mode='Markdown'
@@ -62,7 +68,7 @@ class SessionGeneratorBot:
         
         return GETTING_API_ID
     
-    def handle_message(self, update: Update, context: CallbackContext):
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Maneja los mensajes durante la conversación"""
         chat_id = update.effective_chat.id
         text = update.message.text
@@ -77,27 +83,27 @@ class SessionGeneratorBot:
                 self.user_data[chat_id]['api_id'] = api_id
                 self.user_data[chat_id]['state'] = GETTING_API_HASH
                 
-                update.message.reply_text(
+                await update.message.reply_text(
                     "✅ API_ID recibido correctamente.\n\n"
                     "Ahora envía tu **API_HASH**:",
                     parse_mode='Markdown'
                 )
             except ValueError:
-                update.message.reply_text("⚠️ El API_ID debe ser un número. Por favor, inténtalo de nuevo.")
+                await update.message.reply_text("⚠️ El API_ID debe ser un número. Por favor, inténtalo de nuevo.")
         elif self.user_data[chat_id]['state'] == GETTING_API_HASH:
             # Si estamos esperando el API_HASH
             self.user_data[chat_id]['api_hash'] = text
             self.user_data[chat_id]['state'] = None
             
             # Generamos la sesión
-            self.generate_session(update, chat_id)
+            await self.generate_session(update, chat_id)
     
-    def generate_session(self, update: Update, chat_id: int):
+    async def generate_session(self, update: Update, chat_id: int):
         """Genera la sesión de Telethon"""
         user_data = self.user_data.get(chat_id, {})
         
         if not user_data or 'api_id' not in user_data or 'api_hash' not in user_data:
-            update.message.reply_text("⚠️ Error: Datos incompletos. Por favor, inicia el proceso nuevamente con /generate")
+            await update.message.reply_text("⚠️ Error: Datos incompletos. Por favor, inicia el proceso nuevamente con /generate")
             return
         
         try:
@@ -118,42 +124,41 @@ class SessionGeneratorBot:
                     "Guarda esta sesión en un lugar seguro."
                 )
                 
-                update.message.reply_text(response_text, parse_mode='Markdown')
+                await update.message.reply_text(response_text, parse_mode='Markdown')
                 
         except Exception as e:
             error_msg = f"⚠️ Error al generar la sesión: {str(e)}"
             logger.error(error_msg)
-            update.message.reply_text(error_msg)
+            await update.message.reply_text(error_msg)
         
         # Limpiamos los datos del usuario
         if chat_id in self.user_data:
             del self.user_data[chat_id]
     
-    def button(self, update: Update, context: CallbackContext):
+    async def button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Maneja los callbacks de los botones"""
         query = update.callback_query
-        query.answer()
+        await query.answer()
         
         if query.data == 'generate':
-            self.start_generate(update, context)
+            await self.start_generate(update, context)
     
-    def error_handler(self, update: Update, context: CallbackContext):
+    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Maneja los errores"""
         logger.error(msg="Error en el bot:", exc_info=context.error)
         
         if update.effective_message:
-            update.effective_message.reply_text(
+            await update.effective_message.reply_text(
                 "⚠️ Ocurrió un error inesperado. Por favor, inténtalo de nuevo."
             )
     
     def run(self):
         """Inicia el bot"""
-        self.updater.start_polling()
-        self.updater.idle()
+        self.application.run_polling()
 
 if __name__ == '__main__':
     # Configura tu token de bot aquí
-    BOT_TOKEN = '7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8'
+    BOT_TOKEN = 7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8'
     
     bot = SessionGeneratorBot(BOT_TOKEN)
     bot.run()
