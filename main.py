@@ -22,9 +22,6 @@ logger = logging.getLogger(__name__)
 # Estados de la conversación
 API_ID, API_HASH, PHONE_NUMBER, CODE, PASSWORD = range(5)
 
-# Diccionario para almacenar datos temporales de usuarios
-user_data_temp = {}
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra información del usuario al usar /start"""
     user = update.effective_user
@@ -141,11 +138,25 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Inicia el bot"""
-    # Reemplaza 'TU_TOKEN_AQUI' con el token de tu bot
-    application = Application.builder().token('7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8').build()
+    # Reemplaza '7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8' con el token de tu bot
+    application = Application.builder().token('TU_TOKEN_AQUI').build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('generate', generate)],
         states={
             API_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_api_id)],
-            API_HASH: [MessageHandler(filters0
+            API_HASH: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_api_hash)],
+            PHONE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone_number)],
+            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_code)],
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(conv_handler)
+
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
