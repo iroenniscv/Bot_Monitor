@@ -158,7 +158,7 @@ class SessionGeneratorBot:
 
 if __name__ == '__main__':
     # Configura tu token de bot aquí
-    BOT_TOKEN = 7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8'
+    BOT_TOKEN = '7725269349:AAFHd6AYWbFkUJ5OjSe2CjenMMjosD_JvD8'
     
     bot = SessionGeneratorBot(BOT_TOKEN)
     bot.run()
