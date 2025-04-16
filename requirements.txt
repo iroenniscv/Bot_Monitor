@@ -1,3 +1,2 @@
-python-telegram-bot
-requests 
-flask
+aiogram==3.4.1
+python-dotenv
